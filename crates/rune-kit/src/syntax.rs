@@ -122,9 +122,9 @@ impl From<Color> for Paint {
 pub type Highlight = (Range<usize>, Paint);
 
 /// Bytes coloured per source; past this (cut at a line end) the code draws plain.
-const MAX_SOURCE: usize = 128 * 1024;
+pub(crate) const MAX_SOURCE: usize = 128 * 1024;
 /// Coloured ranges per source; past this the code draws plain.
-const MAX_TOKENS: usize = 32 * 1024;
+pub(crate) const MAX_TOKENS: usize = 32 * 1024;
 
 /// Whether the built-in highlighter colours `lang`, a fence's language name or alias
 /// (case-insensitive): `rust`/`rs`, `ts`/`typescript`, `c++`/`cpp`, `c#`/`cs`, `kotlin`/`kt`,

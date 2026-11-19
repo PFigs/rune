@@ -698,6 +698,22 @@ impl DiffState {
         file.context_line(g.old.saturating_add(off), g.new.saturating_add(off))
     }
 
+    /// The highlights of `side` of file `f` from line `from` to the end of chunk `c`, and the
+    /// byte offset of each line of chunk `c` in that text, and one past its last.
+    fn lex_chunk(&self, f: usize, side: Side, c: u32, from: u32) -> (Vec<u32>, Rc<[crate::syntax::Highlight]>) {
+        let mut text = String::new();
+        let mut starts = Vec::with_capacity(CHUNK as usize + 1);
+        for m in from..=(c + 1) * CHUNK {
+            if m > c * CHUNK {
+                starts.push(text.len() as u32);
+            }
+            text.push_str(self.side_line(f, side, m).unwrap_or(""));
+            text.push('\n');
+        }
+        starts.push(text.len() as u32);
+        (starts, self.highlighter.highlight(self.files[f].language(), &text))
+    }
+
     /// Colour-only highlights of line `n` of `side` of file `f`, relative to the line.
     pub(crate) fn highlights(&self, f: usize, side: Side, n: u32) -> Vec<(std::ops::Range<usize>, crate::syntax::Paint)> {
         let lang = self.files[f].language();
@@ -708,16 +724,16 @@ impl DiffState {
         let key = (f as u32, side, c);
         let chunk = self.chunks.borrow().get(&key).cloned();
         let chunk = chunk.unwrap_or_else(|| {
-            let mut text = String::new();
-            let mut starts = Vec::with_capacity(CHUNK as usize + 1);
-            for m in c * CHUNK + 1..=(c + 1) * CHUNK {
-                starts.push(text.len() as u32);
-                text.push_str(self.side_line(f, side, m).unwrap_or(""));
-                text.push('\n');
-            }
-            starts.push(text.len() as u32);
-            let hl = self.highlighter.highlight(lang, &text);
-            let chunk = Rc::new(Chunk { starts, hl });
+            // Lex from line 1, so a string or comment opened in an earlier chunk keeps its
+            // colour here. A source past the colour limits lexes the chunk on its own.
+            let (starts, hl) = self.lex_chunk(f, side, c, 1);
+            let (starts, hl) = if hl.len() >= crate::syntax::MAX_TOKENS || starts[CHUNK as usize] as usize > crate::syntax::MAX_SOURCE {
+                self.lex_chunk(f, side, c, c * CHUNK + 1)
+            } else {
+                (starts, hl)
+            };
+            let first = hl.partition_point(|(r, _)| r.end <= starts[0] as usize);
+            let chunk = Rc::new(Chunk { starts, hl: hl[first..].into() });
             let mut cache = self.chunks.borrow_mut();
             if cache.len() > 512 {
                 cache.clear();
@@ -1014,5 +1030,17 @@ mod tests {
         assert_eq!(s.set_visible_rows(7..9), (Some(2), true));
         assert_eq!((s.visible_file(), s.sticky()), (2, Some(2)));
         assert_eq!(s.row_from(7, 25.0), Some(8));
+    }
+
+    #[test]
+    fn a_string_that_runs_past_a_block_of_lines_keeps_its_colour() {
+        let body: String = (2..=300).map(|i| format!("V id=jsuid_{i}\n")).collect();
+        let new = format!("x = \"\"\"\n{body}\"\"\"\n");
+        let s = DiffState::new(vec![FileDiff::from_texts("t.py", "", &new)]);
+        let inside = s.highlights(0, Side::New, 100);
+        assert!(!inside.is_empty(), "line 100 is coloured as a string");
+        for n in [128, 129, 200, 257] {
+            assert_eq!(s.highlights(0, Side::New, n), inside, "line {n} is still inside the string");
+        }
     }
 }
