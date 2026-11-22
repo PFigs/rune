@@ -350,6 +350,20 @@ impl DiffState {
         }
     }
 
+    /// Fold each file for which `collapsed` is true and open the others, in one rebuild, as a
+    /// call of [`Self::set_collapsed`] per file would rebuild once per file.
+    pub fn set_collapsed_where(&mut self, collapsed: impl Fn(usize) -> bool) {
+        let mut changed = false;
+        for (f, u) in self.ui.iter_mut().enumerate() {
+            let c = collapsed(f);
+            changed |= u.collapsed != c;
+            u.collapsed = c;
+        }
+        if changed {
+            self.rebuild();
+        }
+    }
+
     /// Lines of `file`'s unchanged range before hunk `gap` still hidden, when known.
     pub fn hidden(&self, file: usize, gap: usize) -> Option<u32> {
         let g = self.gaps.get(file)?.get(gap)?;
@@ -907,6 +921,23 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn set_collapsed_where_folds_many_files_in_one_rebuild() {
+        let file = |name: &str| FileDiff::from_texts(name, "a\n", "b\n");
+        let files = vec![file("a.txt"), file("b.txt"), file("c.txt")];
+        let mut one_by_one = DiffState::new(files.clone());
+        one_by_one.set_collapsed(0, true);
+        one_by_one.set_collapsed(2, true);
+        let mut s = DiffState::new(files);
+        let rev = s.rev;
+        s.set_collapsed_where(|f| f != 1);
+        assert_eq!(s.rev, rev + 1, "one rebuild");
+        assert_eq!(shown(&s), shown(&one_by_one));
+        assert_eq!((0..3).map(|f| s.collapsed(f)).collect::<Vec<_>>(), [true, false, true]);
+        s.set_collapsed_where(|f| f != 1);
+        assert_eq!(s.rev, rev + 1, "no rebuild when nothing changes");
     }
 
     #[test]
