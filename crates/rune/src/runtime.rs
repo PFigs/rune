@@ -894,6 +894,12 @@ impl<S: 'static> Runtime<S> {
         Self::with_text(state, view, viewport, env, TextSystem::default())
     }
 
+    /// Mounts and unmounts at once in a commit no input caused, as every app window does
+    /// (`Tx::unprompted`), so a test sees the motion a window shows.
+    pub fn motion_needs_cause(&mut self) {
+        self.motion_needs_cause = true;
+    }
+
     pub fn with_text(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
         let mut scene = Scene::new();
         scene.set_pixel_scale(env.scale);
