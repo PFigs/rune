@@ -70,6 +70,7 @@ pub struct DiffView<S> {
     on_select: Option<Rc<dyn Fn(&mut S, Option<LineRange>, &mut Tx)>>,
     on_comment: Option<Rc<dyn Fn(&mut S, LineRange, &mut Tx)>>,
     on_visible_file: Option<Rc<dyn Fn(&mut S, usize)>>,
+    syntax: Option<SyntaxTheme>,
 }
 
 impl<S: 'static> DiffView<S> {
@@ -84,6 +85,7 @@ impl<S: 'static> DiffView<S> {
             on_select: None,
             on_comment: None,
             on_visible_file: None,
+            syntax: None,
         }
     }
 
@@ -133,9 +135,18 @@ impl<S: 'static> DiffView<S> {
         self
     }
 
+    /// Every token colour of the code at once (by default [`SyntaxTheme::from_kit`]).
+    pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
+        self.syntax = Some(theme);
+        self
+    }
+
     pub fn build(self, s: &S, k: &Kit) -> El {
         let st = (self.get)(s);
-        let look = Look::new(k);
+        let mut look = Look::new(k);
+        if let Some(theme) = self.syntax {
+            look.syntax = theme;
+        }
         let wrap = st.wraps();
         let key = self.key.clone();
         if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
