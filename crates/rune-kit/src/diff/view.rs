@@ -71,6 +71,7 @@ pub struct DiffView<S> {
     on_comment: Option<Rc<dyn Fn(&mut S, LineRange, &mut Tx)>>,
     on_visible_file: Option<Rc<dyn Fn(&mut S, usize)>>,
     syntax: Option<SyntaxTheme>,
+    plain_added: bool,
 }
 
 impl<S: 'static> DiffView<S> {
@@ -86,6 +87,7 @@ impl<S: 'static> DiffView<S> {
             on_comment: None,
             on_visible_file: None,
             syntax: None,
+            plain_added: false,
         }
     }
 
@@ -138,6 +140,13 @@ impl<S: 'static> DiffView<S> {
     /// Every token colour of the code at once (by default [`SyntaxTheme::from_kit`]).
     pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
         self.syntax = Some(theme);
+        self
+    }
+
+    /// Draw the lines of an added file as unchanged code, with no added-line tint or bar, so
+    /// it reads as plain code. Off by default.
+    pub fn plain_added_files(mut self, on: bool) -> Self {
+        self.plain_added = on;
         self
     }
 
@@ -374,10 +383,15 @@ impl<S: 'static> View<S> {
             }),
             _ if !st.annotations().is_empty() && self.d.annotation.is_some() && self.annotated(st, r) => self.line(s, st, i),
             _ => {
-                let version = (self.look.version, st.rev, st.row_selected(i, None), st.copy_side(), st.selection().map(|s| s.start.side));
+                let version = (self.look.version, st.rev, st.row_selected(i, None), st.copy_side(), st.selection().map(|s| s.start.side), self.d.plain_added);
                 memo(key, version, || self.line(s, st, i))
             }
         }
+    }
+
+    /// How a line draws: an added file's lines as unchanged code under `plain_added_files`.
+    fn paint(&self, st: &DiffState, f: usize, kind: LineKind) -> LineKind {
+        if self.d.plain_added && st.files()[f].status == FileStatus::Added { LineKind::Context } else { kind }
     }
 
     fn annotated(&self, st: &DiffState, r: Row) -> bool {
@@ -467,7 +481,8 @@ impl<S: 'static> View<S> {
     fn unified(&self, st: &DiffState, i: usize, f: usize, c: Cell<'_>) -> El {
         let l = &self.look;
         let selected = st.row_selected(i, None);
-        let tints = l.tints(c.kind);
+        let paint = self.paint(st, f, c.kind);
+        let tints = l.tints(paint);
         let fill = if selected { l.selected } else { tints.map_or(l.bg, |t| t.line) };
         let digits = st.digits(f);
         let copy = match c.kind {
@@ -482,10 +497,10 @@ impl<S: 'static> View<S> {
             .key("gutter")
             .self_stretch()
             .items_stretch()
-            .fill(l.gutter_fill(c.kind, selected))
-            .child(self.bar(c.kind))
-            .child(self.number(st, i, f, c.old, Side::Old, c.kind, selected, digits).key("no"))
-            .child(self.number(st, i, f, c.new, Side::New, c.kind, selected, digits).key("nn"));
+            .fill(l.gutter_fill(paint, selected))
+            .child(self.bar(paint))
+            .child(self.number(st, i, f, c.old, Side::Old, paint, selected, digits).key("no"))
+            .child(self.number(st, i, f, c.new, Side::New, paint, selected, digits).key("nn"));
         if self.d.on_comment.is_some() {
             let at = c.new.map(|n| LineRef::new(Side::New, n)).or(c.old.map(|n| LineRef::new(Side::Old, n)));
             if let Some(at) = at {
@@ -520,8 +535,9 @@ impl<S: 'static> View<S> {
             };
             // An unchanged line shows on both sides as context.
             let kind = c.kind;
+            let paint = self.paint(st, f, kind);
             let selected = st.row_selected(i, Some(side));
-            let fill = if selected { l.selected } else { l.tints(kind).map_or(l.bg, |t| t.line) };
+            let fill = if selected { l.selected } else { l.tints(paint).map_or(l.bg, |t| t.line) };
             let n = if side == Side::Old { c.old } else { c.new };
             let mut cell = c;
             if kind == LineKind::Context {
@@ -534,8 +550,8 @@ impl<S: 'static> View<S> {
                 .hover_group()
                 .role("listitem")
                 .label(cell.label())
-                .child(self.bar(kind))
-                .child(self.number(st, i, f, n, side, kind, selected, digits).key("n"))
+                .child(self.bar(paint))
+                .child(self.number(st, i, f, n, side, paint, selected, digits).key("n"))
                 .child(self.code(st, f, &cell, copy, side, &st.keys[i]).key("code"));
             if let (Some(n), true) = (n, self.d.on_comment.is_some()) {
                 h = h.child(self.plus(f, LineRef::new(side, n)).absolute(BAR + l.number_w(digits) - 10.0, 2.0));

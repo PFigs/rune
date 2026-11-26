@@ -5,9 +5,9 @@
 use std::fmt::Write;
 
 use rune::runtime::ElementInfo;
-use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextEdit, TextStyle, Tx, col, el, text_input};
+use rune::{Color, Cx, El, Env, Key, KeyEvent, Mods, Runtime, TextEdit, TextStyle, Tx, col, el, text_input};
 use rune_kit::Kit;
-use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, Expand, FileDiff, LineKind, LineRange, LineRef, Side, parse};
+use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, Expand, FileDiff, FileStatus, LineKind, LineRange, LineRef, Side, parse};
 
 /// Files, hunks and lines as text: `-`/`+`/space, the old and new numbers, and word changes
 /// in brackets.
@@ -170,6 +170,7 @@ struct App {
     comments: Vec<LineRange>,
     visible: Vec<usize>,
     actions: Vec<usize>,
+    plain_added: bool,
 }
 
 const NOTE_H: f32 = 90.0;
@@ -182,6 +183,7 @@ fn view(s: &App, _: &mut Cx<App>) -> El {
         .on_select(|s: &mut App, sel, _| s.selections.push(sel))
         .on_comment(|s: &mut App, lines, _| s.comments.push(lines))
         .on_visible_file(|s: &mut App, f| s.visible.push(f))
+        .plain_added_files(s.plain_added)
         .build(s, &k);
     col().w_full().h_full().child(diff)
 }
@@ -191,7 +193,7 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn runtime(diff: DiffState, size: (f32, f32)) -> Runtime<App> {
-    let app = App { diff, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new() };
+    let app = App { diff, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new(), plain_added: false };
     let mut rt = Runtime::new(app, view, size, Env::new(true, 2.0));
     rt.on_key = Some(on_key);
     rt.frame(0.0);
@@ -413,7 +415,7 @@ fn unified_file_headers_span_the_viewport_while_code_scrolls_sideways() {
     let files = (0..2).map(|i| FileDiff::from_texts(format!("dir/f{i}.rs"), &old, &new)).collect();
     let mut d = DiffState::new(files);
     d.set_mode(DiffMode::Unified);
-    let app = App { diff: d, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new() };
+    let app = App { diff: d, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new(), plain_added: false };
     let mut rt = Runtime::new(app, view, (600.0, 400.0), Env::new(true, 2.0));
     rt.on_key = Some(on_key);
     // Frame 0 already settles the viewport width in the same commit, with no one-frame lag.
@@ -755,7 +757,7 @@ fn diff_50k_time() {
     let start = Instant::now();
     let state = DiffState::new(vec![file]);
     let rows_ms = start.elapsed().as_secs_f64() * 1e3;
-    let app = App { diff: state, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new() };
+    let app = App { diff: state, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new(), plain_added: false };
     let start = Instant::now();
     let mut rt = Runtime::new(app, view, (1200.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
@@ -764,7 +766,7 @@ fn diff_50k_time() {
     // A commit costs the same as a short diff's: the rows in view, not the length.
     {
         let (old, new) = numbered(300, 7);
-        let app = App { diff: DiffState::new(vec![FileDiff::from_texts("small.rs", &old, &new)]), selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new() };
+        let app = App { diff: DiffState::new(vec![FileDiff::from_texts("small.rs", &old, &new)]), selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new(), plain_added: false };
         let mut small = Runtime::new(app, view, (1200.0, 900.0), Env::new(true, 2.0));
         for _ in 0..30 {
             small.frame(1.0 / 120.0);
@@ -819,4 +821,30 @@ fn diff_50k_time() {
     }
     jumps.sort_by(f64::total_cmp);
     println!("jump 150k-300k pt: p50 {:.2} ms, max {:.2} ms", jumps[10], jumps[19]);
+}
+
+/// A runtime whose diff view draws added files as plain code.
+fn plain_runtime(diff: DiffState) -> Runtime<App> {
+    let app = App { diff, selections: Vec::new(), comments: Vec::new(), visible: Vec::new(), actions: Vec::new(), plain_added: true };
+    let mut rt = Runtime::new(app, view, (800.0, 400.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    settle(&mut rt);
+    rt
+}
+
+#[test]
+fn an_added_file_reads_as_plain_code_when_asked() {
+    let mut file = FileDiff::from_texts("new.rs", "", "fn a() {}\nlet b = 1;\n");
+    file.status = FileStatus::Added;
+    let bg = Kit::neutral(true).c.bg_base;
+    let rt = runtime(DiffState::new(vec![file.clone()]), (800.0, 400.0));
+    assert_ne!(find(&rt, "df0.n1").fill, bg, "an added line is tinted by default");
+    let rt = plain_runtime(DiffState::new(vec![file]));
+    assert_eq!(find(&rt, "df0.n1").fill, bg, "an added file draws as plain code");
+    assert_eq!(find(&rt, "df0.n1/gutter").fill, bg, "with a plain gutter");
+    assert_eq!(find(&rt, "df0.n1/gutter/bar").fill, Color::TRANSPARENT, "and no green bar");
+    // A changed file keeps its tints.
+    let rt = plain_runtime(tabbed());
+    let added = rows(&rt).into_iter().find(|e| e.label.as_deref().is_some_and(|l| l.starts_with("added"))).expect("an added row");
+    assert_ne!(added.fill, bg, "a changed file's added line stays tinted");
 }
